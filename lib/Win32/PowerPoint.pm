@@ -4,11 +4,12 @@ use strict;
 use warnings;
 use Carp;
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 use File::Spec;
 use File::Basename;
 use Win32::OLE;
+use Win32::OLE::Variant;
 use Win32::PowerPoint::Constants;
 use Win32::PowerPoint::Utils qw(
   RGB
@@ -220,6 +221,74 @@ sub new_slide {
   );
 }
 
+
+#####    ##    ####  ######         ####  ###### ##### #    # #####
+#    #  #  #  #    # #             #      #        #   #    # #    #
+#    # #    # #      #####          ####  #####    #   #    # #    #
+#####  ###### #  ### #                  # #        #   #    # #####
+#      #    # #    # #             #    # #        #   #    # #
+#      #    #  ####  ###### ######  ####  ######   #    ####  #
+
+# Added 03Sep2022 by Thomas Catsburg
+#
+# Special thanks to Perl Monks Bod and kcott and an Anonymous Monk for their insights into page setup
+
+sub page_setup
+{
+  # Get the self and options
+  my ($self, $options) = @_;
+
+  # Clear options unless the given option set is a hash
+  $options = {} unless ref $options eq 'HASH';
+
+  # PPT.PageSetup.SlideSize = ppSlideSizeA4Paper
+  # Const ppSlideSizeA4Paper = 3
+
+  # Microsoft SlideSize in Constants.pm
+  #
+  #  Name Value Description
+  #  ppSlideSize35MM  4 35MM
+  #  ppSlideSizeA3Paper 9 A3 Paper
+  #  ppSlideSizeA4Paper 3 A4 Paper
+  #  ppSlideSizeB4ISOPaper  10  B4 ISO Paper
+  #  ppSlideSizeB4JISPaper  12  B4 JIS Paper
+  #  ppSlideSizeB5ISOPaper  11  B5 ISO Paper
+  #  ppSlideSizeB5JISPaper  13  B5 JIS Paper
+  #  ppSlideSizeBanner  6 Banner
+  #  ppSlideSizeCustom  7 Custom
+  #  ppSlideSizeHagakiCard  14  Hagaki Card
+  #  ppSlideSizeLedgerPaper 8 Ledger Paper
+  #  ppSlideSizeLetterPaper 2 Letter Paper
+  #  ppSlideSizeOnScreen  1 On Screen
+  #  ppSlideSizeOverhead  5 Overhead
+
+  # If given SlideSize
+  if ( defined $options->{SlideSize} )
+  {
+    # Set the slide size
+    $self->presentation->PageSetup->{SlideSize} = $options->{SlideSize};
+  }
+
+  # If given slide width
+  if ( defined $options->{SlideWidth} )
+  {
+    # Set the slide width
+    $self->presentation->PageSetup->{SlideWidth} = $options->{SlideWidth};
+  }
+
+  # If given the slide height
+  if ( defined $options->{SlideHeight} )
+  {
+    # Set the slide height
+    $self->presentation->PageSetup->{SlideHeight} = $options->{SlideHeight};
+  }
+
+  # Return
+  return;
+}
+
+
+
 sub set_footer {
   my $self = shift;
 
@@ -273,12 +342,270 @@ sub add_text {
   return $new_textbox;
 }
 
-sub add_picture {
+
+  ##   #####  #####         #      ### #    # ######
+ #  #  #    # #    #        #       #  ##   # #
+#    # #    # #    #        #       #  # #  # #####
+###### #    # #    #        #       #  #  # # #
+#    # #    # #    #        #       #  #   ## #
+#    # #####  #####  ###### ###### ### #    # ######
+
+# Added 03Sep2022 by Thomas Catsburg
+#
+# Special thanks to Perl Monk haukex for insight on how to correctly call Shapes->AddLine
+#
+
+sub add_line
+{
+  # Get the self and options
+  my ($self, $options) = @_;
+
+  # Return if self is not a slide
+  return unless $self->slide;
+
+  # Clear options unless the given option set is a hash
+  $options = {} unless ref $options eq 'HASH';
+
+  # Create the line using the given 4 points
+  my $new_line = $self->slide->Shapes->AddLine($options->{x1}, $options->{y1}, $options->{x2}, $options->{y2});
+
+  # Set the line color if given
+  $new_line->{Line}{ForeColor}{RGB}=RGB($options->{forecolor}) if(defined $options->{forecolor});
+
+  # Set the line weight if given
+  $new_line->{Line}{Weight}=$options->{weight} if(defined $options->{weight});
+
+  # Set the line pattern if given
+  $new_line->{Line}{Pattern}=$options->{pattern} if(defined $options->{pattern});
+
+  # Return the line handle
+  return $new_line;
+}
+
+
+  ##   #####  #####         #####   ####  #       #   # #      ### #    # ######
+ #  #  #    # #    #        #    # #    # #        # #  #       #  ##   # #
+#    # #    # #    #        #    # #    # #         #   #       #  # #  # #####
+###### #    # #    #        #####  #    # #         #   #       #  #  # # #
+#    # #    # #    #        #      #    # #         #   #       #  #   ## #
+#    # #####  #####  ###### #       ####  ######    #   ###### ### #    # ######
+
+# Added 14Jun2023 by Thomas Catsburg
+
+sub add_polyline
+{
+  # Get the self and options
+  my ($self, $options) = @_;
+
+  # Return if self is not a slide
+  return unless $self->slide;
+
+  # Clear options unless the given option set is a hash
+  $options = {} unless ref $options eq 'HASH';
+
+  my $points=$options->{points};
+
+  # Get the points
+  my @points=@{ $options->{points} };
+
+  # Add the first 2 points onto the end of the list to close the loop
+  push @points, $points[0];
+  push @points, $points[1];
+
+  # Choose an array size
+  my $asize=int(($#points+1)/2);
+
+  # Create the Win32::OLE::Variant - Special thanks to Perl Monk Corion for help on how to dimension the pointlist array
+  my $pointlist = Win32::OLE::Variant->new(VT_ARRAY | VT_R4 , $asize, 2);
+
+  # Convert points to Win32::OLE::Variant
+  for my $index (0 .. int(($#points-1)/2))
+  {
+    # Add x
+    $pointlist->Put( $index, 0, shift(@points) );
+
+    # Add y
+    $pointlist->Put( $index, 1, shift(@points) );
+  }
+
+  # Create the poly line using the variant point list
+  my $new_poly=$self->slide->Shapes->AddPolyline($pointlist);
+
+  # Set the line color if given
+  $new_poly->{Line}{ForeColor}{RGB}=RGB($options->{forecolor}) if(defined $options->{forecolor});
+
+  # Set the line weight if given
+  $new_poly->{Line}{Weight}=$options->{weight} if(defined $options->{weight});
+
+  # Set the line pattern if given
+  $new_poly->{Line}{Pattern}=$options->{pattern} if(defined $options->{pattern});
+
+  # If the fill color is given
+  if(defined $options->{fillcolor})
+  {
+    # Set the fill color
+    $new_poly->{Fill}{ForeColor}{RGB}=RGB($options->{fillcolor});
+  }
+  else
+  {
+    # Kludge - set transparancy to 100% if no fill color given
+    $new_poly->{Fill}{Transparency}=1;
+  }
+
+  # Return the poly line handle
+  return $new_poly;
+}
+
+
+  ##   #####  #####          ####  #    # #####  #    # ######
+ #  #  #    # #    #        #    # #    # #    # #    # #
+#    # #    # #    #        #      #    # #    # #    # #####
+###### #    # #    #        #      #    # #####  #    # #
+#    # #    # #    #        #    # #    # #   #   #  #  #
+#    # #####  #####  ######  ####   ####  #    #   ##   ######
+
+# Added 14Jun2023 by Thomas Catsburg
+
+sub add_curve
+{
+  # Get the self and options
+  my ($self, $options) = @_;
+
+  # Return if self is not a slide
+  return unless $self->slide;
+
+  # Clear options unless the given option set is a hash
+  $options = {} unless ref $options eq 'HASH';
+
+  my $points=$options->{points};
+
+  # Get the points
+  my @points=@{ $options->{points} };
+
+  # Choose an array size
+  my $asize=int(($#points+1)/2);
+
+  # Create the Win32::OLE::Variant - Special thanks to Perl Monk Corion for help on how to dimension the pointlist array
+  my $pointlist = Win32::OLE::Variant->new(VT_ARRAY | VT_R4 , $asize, 2);
+
+  # Convert points to Win32::OLE::Variant
+  for my $index (0 .. int(($#points-1)/2))
+  {
+    # Add x
+    $pointlist->Put( $index, 0, shift(@points) );
+
+    # Add y
+    $pointlist->Put( $index, 1, shift(@points) );
+  }
+
+  # Create the curve line using the variant point list
+  my $new_curve=$self->slide->Shapes->AddCurve($pointlist);
+
+  # Set the line color if given
+  $new_curve->{Line}{ForeColor}{RGB}=RGB($options->{forecolor}) if(defined $options->{forecolor});
+
+  # Set the line weight if given
+  $new_curve->{Line}{Weight}=$options->{weight} if(defined $options->{weight});
+
+  # Set the line pattern if given
+  $new_curve->{Line}{Pattern}=$options->{pattern} if(defined $options->{pattern});
+
+  # If the fill color is given
+  if(defined $options->{fillcolor})
+  {
+    # Set the fill color
+    $new_curve->{Fill}{ForeColor}{RGB}=RGB($options->{fillcolor});
+  }
+  else
+  {
+    # Kludge - set transparancy to 100% if no fill color given
+    $new_curve->{Fill}{Transparency}=1;
+  }
+
+  # Return the curve line handle
+  return $new_curve;
+}
+
+
+  ##   #####  #####          ####  #    #   ##   #####  ######
+ #  #  #    # #    #        #      #    #  #  #  #    # #
+#    # #    # #    #         ####  ###### #    # #    # #####
+###### #    # #    #             # #    # ###### #####  #
+#    # #    # #    #        #    # #    # #    # #      #
+#    # #####  #####  ######  ####  #    # #    # #      ######
+
+# Added 03Sep2022 by Thomas Catsburg
+#
+# Special thanks to Perl Monk haukex for insight on how to correctly call Shapes->AddShape
+#
+
+sub add_shape
+{
+  # Get self shape and options
+  my ($self, $shape, $options) = @_;
+
+  # Return if self is not a slide
+  return unless $self->slide;
+
+  # Clear options unless the given option set is a hash
+  $options = {} unless ref $options eq 'HASH';
+
+  # Create the shape using the given shape and options
+  my $new_shape = $self->slide->Shapes->AddShape($self->c->$shape, $options->{left}, $options->{top}, $options->{width}, $options->{height});
+
+  # Set the line color if given
+  $new_shape->{Line}{ForeColor}{RGB}=RGB($options->{bordercolor}) if(defined $options->{bordercolor});
+
+  # Set the line weight if given
+  $new_shape->{Line}{Weight}=$options->{weight} if(defined $options->{weight});
+
+  # If the fill color is given
+  if(defined $options->{fillcolor})
+  {
+    # Set the fill color
+    $new_shape->{Fill}{ForeColor}{RGB}=RGB($options->{fillcolor});
+  }
+  else
+  {
+    # Kludge - set transparancy to 100% if no fill color given
+    $new_shape->{Fill}{Transparency}=1;
+  }
+
+  # Set the shape rotation if given
+  $new_shape->{Rotation}=$options->{rotation} if(defined $options->{rotation});
+
+  # If shape is a msoShapeArc
+  if($shape =~ /msoShapeArc/i)
+  {
+    # Set the start and extent angles of an arc
+    $new_shape->{Adjustments}{1}=$options->{start};
+    $new_shape->{Adjustments}{2}=$options->{extent};
+  }
+
+  # Return the shape handle
+  return $new_shape;
+}
+
+
+  ##   #####  #####         #####  ###  ####  ##### #    # #####  ######
+ #  #  #    # #    #        #    #  #  #    #   #   #    # #    # #
+#    # #    # #    #        #    #  #  #        #   #    # #    # #####
+###### #    # #    #        #####   #  #        #   #    # #####  #
+#    # #    # #    #        #       #  #    #   #   #    # #   #  #
+#    # #####  #####  ###### #      ###  ####    #    ####  #    # ######
+
+sub add_picture
+{
+  # Get the self image file and options
   my ($self, $file, $options) = @_;
 
+  # Return if self is not a slide
   return unless $self->slide;
+
+  # Return if file is not a file
   return unless defined $file and -f $file;
 
+  # Clear options unless the given option set is a hash
   $options = {} unless ref $options eq 'HASH';
 
   my ($left, $top);
@@ -390,7 +717,7 @@ __END__
 
 =head1 NAME
 
-Win32::PowerPoint - helps to convert texts to PP slides
+Win32::PowerPoint - Create and Edit PowerPoint presentations
 
 =head1 SYNOPSIS
 
@@ -415,7 +742,7 @@ Win32::PowerPoint - helps to convert texts to PP slides
       datetime_format => 'MMMMyy',
     );
 
-    (load and parse your slide text)
+    (load and parse your slide)
 
     # do whatever you want to do for each of your slides
     foreach my $slide (@slides) {
@@ -437,13 +764,15 @@ Win32::PowerPoint - helps to convert texts to PP slides
 
 =head1 DESCRIPTION
 
-Win32::PowerPoint helps you to create a PowerPoint presentation. You can add texts/pictures incrementally to your slides.
+Win32::PowerPoint helps you to create or edit a PowerPoint presentation. You can add text/images incrementally to your slides.
 
 =head1 METHODS
 
 =head2 new
 
 Invokes (or connects to) PowerPoint.
+
+    my $pp=Win32::PowerPoint->new();
 
 =head2 connect_or_invoke
 
@@ -469,6 +798,10 @@ you specify other colors for the slides explicitly.
 
 You can use 'masterbkgforecolor' and 'masterbkgbackcolor' as aliases.
 
+Extension: Use the routine convert2RGBvalues to take a color name or
+RGB hex color and convert to a comma seperated list of decimal color
+values so black becomes '0, 0, 0'
+
 =item pattern
 
 You also can specify default background pattern for the slides.
@@ -477,6 +810,15 @@ supported pattern names. You can omit 'msoPattern' part and the names
 are case-sensitive.
 
 =back
+
+=head2 page_setup
+
+Set the page dimensions
+
+  Standard 4:3 PowerPoint page is 10in x 7.5in or 720pt x 540pt
+
+  $pp->page_setup( { SlideWidth  => 720,
+                     SlideHeight => 540 });
 
 =head2 save_presentation (path)
 
@@ -518,6 +860,47 @@ of the Textbox.
 =back
 
 See 'decorate_range' for other options.
+
+=head2 add_line
+
+Draw a line with coordinate pairs with defined weight (in points) and color
+
+  $pp->add_line({'x1'        => $x1,
+                 'y1'        => $y1,
+                 'x2'        => $x2,
+                 'y2'        => $y2,
+                 'weight'    => 1,
+                 'forecolor' => &convert2RGBvalues($color) });
+
+=head2 add_polyline
+
+Draw a line with multiple coordinate pairs, closing the line by repeating the 
+initial coordinate pair to the end of the list of coordinate pairs, with 
+defined weight (in points) and color and fillcolor.
+
+This method is used to draw shapes using point sets, with three points making a
+triangle, 4 a rectanlge and so on.
+
+  $pp->add_polyline({'points'    => [@points[0 .. $#points]],
+                     'fillcolor' => &convert2RGBvalues($fill),
+                     'weight'    => 1,
+                     'forecolor' => &convert2RGBvalues($color) });
+
+=head2 add_curve
+
+Draw a smooth curve spline given a set of at least 3 coordinate pairs with
+defined weight (in points) and color.
+
+  $pp->add_curve({'points'    => [@curve[0 .. $#curve]],
+                  'weight'    => 1,
+                  'forecolor' => &convert2RGBvalues($color) } );
+
+=head2 add_shape
+
+Draw PowerPoint pre-defined shape as from the PowerPoint Insert >> Shape menu.
+
+  The shapes are given in Constants.pm as PowerPoint shape names msoShape
+  See L<Win32::PowerPoint::Constants> for msoAutoShapeType
 
 =head2 add_picture (file, options)
 
@@ -650,10 +1033,10 @@ Kenichi Ishigaki, E<lt>ishigaki@cpan.orgE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2006- by Kenichi Ishigaki
+Copyright (C) 2006 - by Kenichi Ishigaki
+              2025 - by Thomas Catsburg
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.
 
 =cut
-
